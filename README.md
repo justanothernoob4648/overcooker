@@ -42,6 +42,11 @@ To run with local pygame renderer:
     python src/game.py --red bots/duo_noodle_bot.py --blue bots/duo_noodle_bot.py --map maps/map1.txt --render
 ```
 
+## Bot API Document
+
+[API Google Doc](https://docs.google.com/document/d/1nUkWxDJRSEe4xSbe1q4rNd6GeMOpzQO-H_nWJHBnP14/edit?tab=t.0#heading=h.itwj41env6xx)
+
+
 ## Repo Structure
 
 - **`src/game.py`**
