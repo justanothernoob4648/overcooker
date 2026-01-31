@@ -168,3 +168,174 @@ class Pathfinder:
 
     def clear_cache(self) -> None:
         self._cache.clear()
+
+
+# ── Analyzer ──────────────────────────────────────────────────────
+class Analyzer:
+    """Scans the map and populates TurnContext."""
+
+    def __init__(self):
+        self._initialized = False
+        self._ctx = TurnContext()
+
+    def analyze(self, controller: RobotController, pathfinder: Pathfinder) -> TurnContext:
+        """Build TurnContext for the current turn."""
+        ctx = self._ctx
+        ctx.turn = controller.get_turn()
+        ctx.my_team = controller.get_team()
+        ctx.enemy_team = controller.get_enemy_team()
+        ctx.money = controller.get_team_money(ctx.my_team)
+        ctx.bot_ids = controller.get_team_bot_ids(ctx.my_team)
+
+        ctx.bot_states = {}
+        for bid in ctx.bot_ids:
+            state = controller.get_bot_state(bid)
+            if state:
+                ctx.bot_states[bid] = state
+
+        if not self._initialized:
+            self._scan_static_map(controller, pathfinder, ctx)
+            self._initialized = True
+
+        self._scan_dynamic_state(controller, ctx)
+        self._track_enemies(controller, ctx)
+        self._scout_enemy_map(controller, ctx)
+
+        return ctx
+
+    def _scan_static_map(self, controller: RobotController, pathfinder: Pathfinder, ctx: TurnContext) -> None:
+        """One-time full map scan on turn 0."""
+        m = controller.get_map(ctx.my_team)
+        ctx.map_width = m.width
+        ctx.map_height = m.height
+
+        tile_names = ["SHOP", "COOKER", "COUNTER", "SINK", "SINKTABLE", "SUBMIT", "TRASH", "BOX"]
+        ctx.tile_cache = {name: [] for name in tile_names}
+        ctx.tile_counts = {name: 0 for name in tile_names}
+
+        for x in range(m.width):
+            for y in range(m.height):
+                tile = m.tiles[x][y]
+                name = tile.tile_name
+                if name in ctx.tile_cache:
+                    ctx.tile_cache[name].append((x, y))
+                    ctx.tile_counts[name] += 1
+
+        ctx.can_cook = ctx.tile_counts.get("COOKER", 0) > 0
+        ctx.can_chop = ctx.tile_counts.get("COUNTER", 0) > 0
+
+        pathfinder.init_walkable(controller, ctx.my_team)
+
+    def _scan_dynamic_state(self, controller: RobotController, ctx: TurnContext) -> None:
+        """Update dynamic state each turn."""
+        ctx.orders = controller.get_orders(ctx.my_team)
+
+        # Scan cookers for pan/food state
+        ctx.pan_locations = {}
+        for (x, y) in ctx.tile_cache.get("COOKER", []):
+            tile = controller.get_tile(ctx.my_team, x, y)
+            if tile is None:
+                continue
+            item = getattr(tile, "item", None)
+            cook_progress = getattr(tile, "cook_progress", 0)
+            if item is not None and hasattr(item, "food"):
+                food_dict = None
+                if item.food is not None:
+                    food_dict = {
+                        "food_name": getattr(item.food, "food_name", None),
+                        "cooked_stage": getattr(item.food, "cooked_stage", 0),
+                    }
+                ctx.pan_locations[(x, y)] = {
+                    "has_pan": True,
+                    "food": food_dict,
+                    "cook_progress": cook_progress,
+                    "is_empty": item.food is None,
+                }
+            else:
+                ctx.pan_locations[(x, y)] = {
+                    "has_pan": False,
+                    "food": None,
+                    "cook_progress": 0,
+                    "is_empty": True,
+                }
+
+        # Scan counters for contents
+        ctx.counter_contents = {}
+        for (x, y) in ctx.tile_cache.get("COUNTER", []):
+            tile = controller.get_tile(ctx.my_team, x, y)
+            if tile is None:
+                continue
+            item = getattr(tile, "item", None)
+            if item is not None:
+                ctx.counter_contents[(x, y)] = controller.item_to_public_dict(item)
+            else:
+                ctx.counter_contents[(x, y)] = None
+
+        # Scan sinks and sink tables
+        ctx.clean_plates_on_tables = 0
+        ctx.dirty_plates_in_sinks = 0
+        ctx.sink_washing = False
+        for (x, y) in ctx.tile_cache.get("SINKTABLE", []):
+            tile = controller.get_tile(ctx.my_team, x, y)
+            if tile is not None:
+                ctx.clean_plates_on_tables += getattr(tile, "num_clean_plates", 0)
+        for (x, y) in ctx.tile_cache.get("SINK", []):
+            tile = controller.get_tile(ctx.my_team, x, y)
+            if tile is not None:
+                ctx.dirty_plates_in_sinks += getattr(tile, "num_dirty_plates", 0)
+                if getattr(tile, "using", False):
+                    ctx.sink_washing = True
+
+    def _track_enemies(self, controller: RobotController, ctx: TurnContext) -> None:
+        """Track enemy bot positions."""
+        enemy_ids = controller.get_team_bot_ids(ctx.enemy_team)
+        ctx.enemy_positions = []
+        ctx.enemy_on_our_map = False
+        for eid in enemy_ids:
+            state = controller.get_bot_state(eid)
+            if state and state.get("map_team") == ctx.my_team.name:
+                ctx.enemy_on_our_map = True
+                ctx.enemy_positions.append((state["x"], state["y"]))
+
+    def _scout_enemy_map(self, controller: RobotController, ctx: TurnContext) -> None:
+        """During sabotage window, snapshot the enemy map."""
+        switch_info = controller.get_switch_info()
+        ctx.enemy_map_snapshot = None
+
+        if not switch_info.get("window_active", False):
+            return
+        if switch_info.get("my_team_switched", False):
+            return
+
+        enemy_map = controller.get_map(ctx.enemy_team)
+        snapshot = {"cookers": {}, "counters": {}}
+
+        for x in range(enemy_map.width):
+            for y in range(enemy_map.height):
+                tile = enemy_map.tiles[x][y]
+                name = tile.tile_name
+                if name == "COOKER":
+                    item = getattr(tile, "item", None)
+                    cook_progress = getattr(tile, "cook_progress", 0)
+                    food_info = None
+                    if item and hasattr(item, "food") and item.food:
+                        food_info = {
+                            "food_name": item.food.food_name,
+                            "cooked_stage": item.food.cooked_stage,
+                            "buy_cost": getattr(item.food, "buy_cost", 0),
+                        }
+                    snapshot["cookers"][(x, y)] = {
+                        "has_pan": item is not None and hasattr(item, "food"),
+                        "food": food_info,
+                        "cook_progress": cook_progress,
+                    }
+                elif name == "COUNTER":
+                    item = getattr(tile, "item", None)
+                    if item is not None:
+                        item_info = {"type": type(item).__name__}
+                        if hasattr(item, "food_name"):
+                            item_info["food_name"] = item.food_name
+                            item_info["buy_cost"] = getattr(item, "buy_cost", 0)
+                        snapshot["counters"][(x, y)] = item_info
+
+        ctx.enemy_map_snapshot = snapshot
