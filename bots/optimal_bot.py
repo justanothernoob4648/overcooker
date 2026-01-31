@@ -339,3 +339,148 @@ class Analyzer:
                         snapshot["counters"][(x, y)] = item_info
 
         ctx.enemy_map_snapshot = snapshot
+
+
+# ── Dependency Graph ──────────────────────────────────────────────
+class NodeStatus:
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    DONE = "done"
+    FAILED = "failed"
+
+
+class GraphNode:
+    """A single task in the dependency graph."""
+
+    def __init__(self, node_id: str, action: str, **kwargs):
+        self.node_id = node_id
+        self.action = action
+        self.status = NodeStatus.PENDING
+        self.dependencies: List[str] = []
+        self.params = kwargs
+        self.priority: int = 0
+        self.deadline: Optional[int] = None
+        self.result_location: Optional[Tuple[int, int]] = None
+
+    def is_ready(self, completed_nodes: Set[str]) -> bool:
+        return all(dep in completed_nodes for dep in self.dependencies)
+
+
+class DependencyGraph:
+    """Dependency graph for fulfilling a single order."""
+
+    def __init__(self, order_id: int):
+        self.order_id = order_id
+        self.nodes: Dict[str, GraphNode] = {}
+        self.completed: Set[str] = set()
+
+    def add_node(self, node: GraphNode) -> None:
+        self.nodes[node.node_id] = node
+
+    def mark_done(self, node_id: str, result_location: Optional[Tuple[int, int]] = None) -> None:
+        self.nodes[node_id].status = NodeStatus.DONE
+        self.completed.add(node_id)
+        if result_location:
+            self.nodes[node_id].result_location = result_location
+
+    def mark_failed(self, node_id: str) -> None:
+        self.nodes[node_id].status = NodeStatus.FAILED
+
+    def get_ready_nodes(self) -> List[GraphNode]:
+        ready = []
+        for node in self.nodes.values():
+            if node.status in (NodeStatus.PENDING, NodeStatus.IN_PROGRESS):
+                if node.is_ready(self.completed):
+                    ready.append(node)
+        return ready
+
+    def is_complete(self) -> bool:
+        return all(n.status == NodeStatus.DONE for n in self.nodes.values())
+
+    def has_failed(self) -> bool:
+        return any(n.status == NodeStatus.FAILED for n in self.nodes.values())
+
+
+def build_order_graph(order: Dict, ctx: TurnContext) -> DependencyGraph:
+    """Build a dependency graph for fulfilling the given order."""
+    graph = DependencyGraph(order["order_id"])
+    required_foods = order["required"]
+
+    FOOD_INFO = {
+        "EGG":     {"needs_chop": False, "needs_cook": True,  "cost": 20},
+        "ONIONS":  {"needs_chop": True,  "needs_cook": False, "cost": 30},
+        "MEAT":    {"needs_chop": True,  "needs_cook": True,  "cost": 80},
+        "NOODLES": {"needs_chop": False, "needs_cook": False, "cost": 40},
+        "SAUCE":   {"needs_chop": False, "needs_cook": False, "cost": 10},
+    }
+
+    FOOD_ENUM = {
+        "EGG": FoodType.EGG,
+        "ONIONS": FoodType.ONIONS,
+        "MEAT": FoodType.MEAT,
+        "NOODLES": FoodType.NOODLES,
+        "SAUCE": FoodType.SAUCE,
+    }
+
+    all_food_final_nodes: List[str] = []
+
+    for i, food_name in enumerate(required_foods):
+        info = FOOD_INFO.get(food_name, {"needs_chop": False, "needs_cook": False, "cost": 0})
+        prefix = f"food_{i}_{food_name}"
+
+        buy_node = GraphNode(f"{prefix}_buy", "buy", item=FOOD_ENUM.get(food_name), food_name=food_name)
+        graph.add_node(buy_node)
+        prev_node_id = buy_node.node_id
+
+        if info["needs_chop"] and ctx.can_chop:
+            place_for_chop = GraphNode(f"{prefix}_place_chop", "place", target_tile="COUNTER")
+            place_for_chop.dependencies = [prev_node_id]
+            graph.add_node(place_for_chop)
+
+            chop_node = GraphNode(f"{prefix}_chop", "chop", target_tile="COUNTER")
+            chop_node.dependencies = [place_for_chop.node_id]
+            graph.add_node(chop_node)
+            prev_node_id = chop_node.node_id
+
+        if info["needs_cook"] and ctx.can_cook:
+            if info["needs_chop"]:
+                pickup_for_cook = GraphNode(f"{prefix}_pickup_for_cook", "pickup", target_tile="COUNTER")
+                pickup_for_cook.dependencies = [prev_node_id]
+                graph.add_node(pickup_for_cook)
+                prev_node_id = pickup_for_cook.node_id
+
+            cook_node = GraphNode(f"{prefix}_start_cook", "start_cook", target_tile="COOKER")
+            cook_node.dependencies = [prev_node_id]
+            graph.add_node(cook_node)
+
+            take_node = GraphNode(f"{prefix}_take_pan", "take_from_pan", target_tile="COOKER")
+            take_node.dependencies = [cook_node.node_id]
+            take_node.priority = 10
+            graph.add_node(take_node)
+
+            place_cooked = GraphNode(f"{prefix}_place_cooked", "place", target_tile="COUNTER")
+            place_cooked.dependencies = [take_node.node_id]
+            graph.add_node(place_cooked)
+            prev_node_id = place_cooked.node_id
+
+        elif not info["needs_chop"]:
+            place_raw = GraphNode(f"{prefix}_place_raw", "place", target_tile="COUNTER")
+            place_raw.dependencies = [prev_node_id]
+            graph.add_node(place_raw)
+            prev_node_id = place_raw.node_id
+
+        all_food_final_nodes.append(prev_node_id)
+
+    plate_node = GraphNode("get_plate", "get_plate")
+    graph.add_node(plate_node)
+
+    assembly_deps = all_food_final_nodes + [plate_node.node_id]
+    assemble_node = GraphNode("assemble", "assemble", num_foods=len(required_foods))
+    assemble_node.dependencies = assembly_deps
+    graph.add_node(assemble_node)
+
+    submit_node = GraphNode("submit", "submit", target_tile="SUBMIT")
+    submit_node.dependencies = [assemble_node.node_id]
+    graph.add_node(submit_node)
+
+    return graph
