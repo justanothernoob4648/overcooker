@@ -665,3 +665,311 @@ class Planner:
 
         est_turns = 20
         return total_value / est_turns
+
+
+# ── Executor ──────────────────────────────────────────────────────
+class Executor:
+    """Translates dependency graph nodes into per-turn move + action calls."""
+
+    def __init__(self):
+        self.ingredient_locations: Dict[str, Tuple[int, int]] = {}
+        self.cook_locations: Dict[str, Tuple[int, int]] = {}
+        self.cook_start_turns: Dict[str, int] = {}
+        self.plate_location: Optional[Tuple[int, int]] = None
+        self.wait_counters: Dict[str, int] = {}
+
+    def execute_turn(self, bot_id: int, graph: DependencyGraph,
+                      ctx: TurnContext, pathfinder: Pathfinder,
+                      controller: RobotController) -> bool:
+        if graph is None or graph.is_complete():
+            return False
+
+        bot_state = ctx.bot_states.get(bot_id)
+        if not bot_state:
+            return False
+        bot_pos = (bot_state["x"], bot_state["y"])
+        holding = bot_state.get("holding")
+
+        blocked = set()
+        for bid, bs in ctx.bot_states.items():
+            if bid != bot_id:
+                blocked.add((bs["x"], bs["y"]))
+        for pos in ctx.enemy_positions:
+            blocked.add(pos)
+
+        burn_node = self._check_burn_urgent(graph, ctx)
+        if burn_node and holding is not None:
+            return self._drop_held_item(bot_id, bot_pos, ctx, pathfinder, controller, blocked)
+
+        ready = graph.get_ready_nodes()
+        if not ready:
+            return False
+
+        if burn_node and burn_node in ready:
+            node = burn_node
+        else:
+            ready.sort(key=lambda n: -n.priority)
+            node = ready[0]
+
+        node.status = NodeStatus.IN_PROGRESS
+        return self._execute_node(bot_id, node, graph, bot_pos, holding,
+                                   ctx, pathfinder, controller, blocked)
+
+    def _check_burn_urgent(self, graph: DependencyGraph, ctx: TurnContext) -> Optional[GraphNode]:
+        for node in graph.nodes.values():
+            if node.action != "take_from_pan":
+                continue
+            if node.status in (NodeStatus.DONE, NodeStatus.FAILED):
+                continue
+            cook_key = node.node_id.replace("_take_pan", "_start_cook")
+            cooker_pos = self.cook_locations.get(cook_key)
+            if cooker_pos is None:
+                continue
+            pan_info = ctx.pan_locations.get(cooker_pos)
+            if pan_info and pan_info.get("food"):
+                progress = pan_info.get("cook_progress", 0)
+                if progress >= GameConstants.COOK_PROGRESS and progress < GameConstants.BURN_PROGRESS - BURN_SAFETY_BUFFER:
+                    continue
+                if progress >= GameConstants.BURN_PROGRESS - BURN_SAFETY_BUFFER:
+                    node.priority = 100
+                    return node
+        return None
+
+    def _execute_node(self, bot_id, node, graph, bot_pos, holding, ctx, pathfinder, controller, blocked):
+        if node.action == "buy":
+            return self._do_buy(bot_id, node, graph, bot_pos, holding, ctx, pathfinder, controller, blocked)
+        elif node.action == "place":
+            return self._do_place(bot_id, node, graph, bot_pos, holding, ctx, pathfinder, controller, blocked)
+        elif node.action == "chop":
+            return self._do_chop(bot_id, node, graph, bot_pos, ctx, pathfinder, controller, blocked)
+        elif node.action == "pickup":
+            return self._do_pickup(bot_id, node, graph, bot_pos, holding, ctx, pathfinder, controller, blocked)
+        elif node.action == "start_cook":
+            return self._do_start_cook(bot_id, node, graph, bot_pos, holding, ctx, pathfinder, controller, blocked)
+        elif node.action == "take_from_pan":
+            return self._do_take_from_pan(bot_id, node, graph, bot_pos, holding, ctx, pathfinder, controller, blocked)
+        elif node.action == "get_plate":
+            return self._do_get_plate(bot_id, node, graph, bot_pos, holding, ctx, pathfinder, controller, blocked)
+        elif node.action == "assemble":
+            return self._do_assemble(bot_id, node, graph, bot_pos, holding, ctx, pathfinder, controller, blocked)
+        elif node.action == "submit":
+            return self._do_submit(bot_id, node, graph, bot_pos, holding, ctx, pathfinder, controller, blocked)
+        return False
+
+    def _move_adjacent(self, bot_id, bot_pos, target, pathfinder, controller, blocked):
+        dist = max(abs(bot_pos[0] - target[0]), abs(bot_pos[1] - target[1]))
+        if dist <= 1:
+            return True
+        step = pathfinder.get_step_toward_adjacent(bot_pos, target, blocked)
+        if step:
+            controller.move(bot_id, step[0], step[1])
+        return False
+
+    def _find_empty_counter(self, ctx):
+        for pos, item in ctx.counter_contents.items():
+            if item is None:
+                return pos
+        return None
+
+    def _find_cooker_with_empty_pan(self, ctx):
+        for pos, info in ctx.pan_locations.items():
+            if info.get("has_pan") and info.get("is_empty"):
+                return pos
+        return None
+
+    def _drop_held_item(self, bot_id, bot_pos, ctx, pathfinder, controller, blocked):
+        counter = self._find_empty_counter(ctx)
+        if counter is None:
+            return False
+        if self._move_adjacent(bot_id, bot_pos, counter, pathfinder, controller, blocked):
+            return controller.place(bot_id, counter[0], counter[1])
+        return True
+
+    def _do_buy(self, bot_id, node, graph, bot_pos, holding, ctx, pathfinder, controller, blocked):
+        if holding is not None:
+            return self._drop_held_item(bot_id, bot_pos, ctx, pathfinder, controller, blocked)
+        shops = ctx.tile_cache.get("SHOP", [])
+        if not shops:
+            graph.mark_failed(node.node_id)
+            return False
+        target = shops[0]
+        if self._move_adjacent(bot_id, bot_pos, target, pathfinder, controller, blocked):
+            item = node.params.get("item")
+            if item and controller.buy(bot_id, item, target[0], target[1]):
+                graph.mark_done(node.node_id)
+                return True
+        return True
+
+    def _do_place(self, bot_id, node, graph, bot_pos, holding, ctx, pathfinder, controller, blocked):
+        if holding is None:
+            graph.mark_done(node.node_id)
+            return False
+        target_tile = node.params.get("target_tile", "COUNTER")
+        if target_tile == "COUNTER":
+            target = self._find_empty_counter(ctx)
+        elif target_tile == "COOKER":
+            target = self._find_cooker_with_empty_pan(ctx)
+        else:
+            target = None
+        if target is None:
+            graph.mark_failed(node.node_id)
+            return False
+        if self._move_adjacent(bot_id, bot_pos, target, pathfinder, controller, blocked):
+            if controller.place(bot_id, target[0], target[1]):
+                graph.mark_done(node.node_id, result_location=target)
+                self.ingredient_locations[node.node_id] = target
+                return True
+        return True
+
+    def _do_chop(self, bot_id, node, graph, bot_pos, ctx, pathfinder, controller, blocked):
+        place_node_id = node.dependencies[0] if node.dependencies else None
+        target = self.ingredient_locations.get(place_node_id)
+        if target is None:
+            for pos, item in ctx.counter_contents.items():
+                if item and item.get("type") == "Food" and not item.get("chopped", False):
+                    target = pos
+                    break
+        if target is None:
+            graph.mark_failed(node.node_id)
+            return False
+        if self._move_adjacent(bot_id, bot_pos, target, pathfinder, controller, blocked):
+            if controller.chop(bot_id, target[0], target[1]):
+                graph.mark_done(node.node_id, result_location=target)
+                self.ingredient_locations[node.node_id] = target
+                return True
+        return True
+
+    def _do_pickup(self, bot_id, node, graph, bot_pos, holding, ctx, pathfinder, controller, blocked):
+        if holding is not None:
+            return self._drop_held_item(bot_id, bot_pos, ctx, pathfinder, controller, blocked)
+        dep_id = node.dependencies[0] if node.dependencies else None
+        target = self.ingredient_locations.get(dep_id)
+        if target is None:
+            graph.mark_failed(node.node_id)
+            return False
+        if self._move_adjacent(bot_id, bot_pos, target, pathfinder, controller, blocked):
+            if controller.pickup(bot_id, target[0], target[1]):
+                graph.mark_done(node.node_id)
+                return True
+        return True
+
+    def _do_start_cook(self, bot_id, node, graph, bot_pos, holding, ctx, pathfinder, controller, blocked):
+        if holding is None:
+            return False
+        cooker = self._find_cooker_with_empty_pan(ctx)
+        if cooker is None:
+            graph.mark_failed(node.node_id)
+            return False
+        if self._move_adjacent(bot_id, bot_pos, cooker, pathfinder, controller, blocked):
+            if controller.start_cook(bot_id, cooker[0], cooker[1]):
+                graph.mark_done(node.node_id, result_location=cooker)
+                self.cook_locations[node.node_id] = cooker
+                self.cook_start_turns[node.node_id] = ctx.turn
+                return True
+            if controller.place(bot_id, cooker[0], cooker[1]):
+                graph.mark_done(node.node_id, result_location=cooker)
+                self.cook_locations[node.node_id] = cooker
+                self.cook_start_turns[node.node_id] = ctx.turn
+                return True
+        return True
+
+    def _do_take_from_pan(self, bot_id, node, graph, bot_pos, holding, ctx, pathfinder, controller, blocked):
+        if holding is not None:
+            return self._drop_held_item(bot_id, bot_pos, ctx, pathfinder, controller, blocked)
+        cook_key = None
+        for dep in node.dependencies:
+            if dep in self.cook_locations:
+                cook_key = dep
+                break
+        cooker = self.cook_locations.get(cook_key) if cook_key else None
+        if cooker is None:
+            for pos, info in ctx.pan_locations.items():
+                if info.get("food") and info["food"].get("cooked_stage", 0) >= 1:
+                    cooker = pos
+                    break
+        if cooker is None:
+            pan_info = None
+            if cook_key and cook_key in self.cook_locations:
+                pan_info = ctx.pan_locations.get(self.cook_locations[cook_key])
+            if pan_info and pan_info.get("food"):
+                stage = pan_info["food"].get("cooked_stage", 0)
+                if stage < 1:
+                    return False
+            return False
+        if self._move_adjacent(bot_id, bot_pos, cooker, pathfinder, controller, blocked):
+            if controller.take_from_pan(bot_id, cooker[0], cooker[1]):
+                graph.mark_done(node.node_id)
+                return True
+        return True
+
+    def _do_get_plate(self, bot_id, node, graph, bot_pos, holding, ctx, pathfinder, controller, blocked):
+        if holding is not None:
+            return self._drop_held_item(bot_id, bot_pos, ctx, pathfinder, controller, blocked)
+        if ctx.clean_plates_on_tables > 0:
+            tables = ctx.tile_cache.get("SINKTABLE", [])
+            if tables:
+                target = tables[0]
+                if self._move_adjacent(bot_id, bot_pos, target, pathfinder, controller, blocked):
+                    if controller.take_clean_plate(bot_id, target[0], target[1]):
+                        graph.mark_done(node.node_id)
+                        return True
+                return True
+        if ctx.dirty_plates_in_sinks > 0:
+            sinks = ctx.tile_cache.get("SINK", [])
+            if sinks:
+                target = sinks[0]
+                if self._move_adjacent(bot_id, bot_pos, target, pathfinder, controller, blocked):
+                    controller.wash_sink(bot_id, target[0], target[1])
+                    return True
+                return True
+        shops = ctx.tile_cache.get("SHOP", [])
+        if shops:
+            target = shops[0]
+            if self._move_adjacent(bot_id, bot_pos, target, pathfinder, controller, blocked):
+                if controller.buy(bot_id, ShopCosts.PLATE, target[0], target[1]):
+                    graph.mark_done(node.node_id)
+                    return True
+            return True
+        return False
+
+    def _do_assemble(self, bot_id, node, graph, bot_pos, holding, ctx, pathfinder, controller, blocked):
+        if holding is None:
+            if self.plate_location:
+                target = self.plate_location
+                if self._move_adjacent(bot_id, bot_pos, target, pathfinder, controller, blocked):
+                    if controller.pickup(bot_id, target[0], target[1]):
+                        self.plate_location = None
+                return True
+            return False
+        if holding and holding.get("type") == "Plate":
+            for node_id, loc in self.ingredient_locations.items():
+                item = ctx.counter_contents.get(loc)
+                if item and item.get("type") == "Food":
+                    if self._move_adjacent(bot_id, bot_pos, loc, pathfinder, controller, blocked):
+                        if controller.add_food_to_plate(bot_id, loc[0], loc[1]):
+                            ctx.counter_contents[loc] = None
+                    return True
+            graph.mark_done(node.node_id)
+            return True
+        if holding and holding.get("type") == "Food":
+            for pos, item in ctx.counter_contents.items():
+                if item and item.get("type") == "Plate" and not item.get("dirty", True):
+                    if self._move_adjacent(bot_id, bot_pos, pos, pathfinder, controller, blocked):
+                        if controller.add_food_to_plate(bot_id, pos[0], pos[1]):
+                            pass
+                    return True
+        return False
+
+    def _do_submit(self, bot_id, node, graph, bot_pos, holding, ctx, pathfinder, controller, blocked):
+        if holding is None or holding.get("type") != "Plate":
+            return False
+        submits = ctx.tile_cache.get("SUBMIT", [])
+        if not submits:
+            graph.mark_failed(node.node_id)
+            return False
+        target = submits[0]
+        if self._move_adjacent(bot_id, bot_pos, target, pathfinder, controller, blocked):
+            if controller.submit(bot_id, target[0], target[1]):
+                graph.mark_done(node.node_id)
+                return True
+        return True
