@@ -973,3 +973,89 @@ class Executor:
                 graph.mark_done(node.node_id)
                 return True
         return True
+
+
+# ── BotPlayer (Entry Point) ──────────────────────────────────────
+class BotPlayer:
+    """Main entry point. Created once per game, play_turn called each turn."""
+
+    def __init__(self, map_copy):
+        self.map = map_copy
+        self.pathfinder = Pathfinder()
+        self.analyzer = Analyzer()
+        self.planner = Planner()
+        self.executors: Dict[int, Executor] = {}
+
+    def play_turn(self, controller: RobotController):
+        try:
+            self._play_turn_inner(controller)
+        except Exception as e:
+            pass
+
+    def _play_turn_inner(self, controller: RobotController):
+        ctx = self.analyzer.analyze(controller, self.pathfinder)
+        graphs = self.planner.plan(ctx, self.pathfinder)
+
+        for bot_id in ctx.bot_ids:
+            graph = graphs.get(bot_id)
+            if graph is None:
+                self._do_idle(bot_id, ctx, controller)
+                continue
+
+            if bot_id not in self.executors:
+                self.executors[bot_id] = Executor()
+
+            executor = self.executors[bot_id]
+
+            if not hasattr(executor, '_current_order') or executor._current_order != graph.order_id:
+                self.executors[bot_id] = Executor()
+                executor = self.executors[bot_id]
+                executor._current_order = graph.order_id
+
+            executor.execute_turn(bot_id, graph, ctx, self.pathfinder, controller)
+
+    def _do_idle(self, bot_id: int, ctx: TurnContext, controller: RobotController):
+        bot_state = ctx.bot_states.get(bot_id)
+        if not bot_state:
+            return
+
+        bot_pos = (bot_state["x"], bot_state["y"])
+        holding = bot_state.get("holding")
+
+        if holding:
+            counter = None
+            for pos, item in ctx.counter_contents.items():
+                if item is None:
+                    counter = pos
+                    break
+            if counter:
+                dist = max(abs(bot_pos[0] - counter[0]), abs(bot_pos[1] - counter[1]))
+                if dist <= 1:
+                    controller.place(bot_id, counter[0], counter[1])
+                else:
+                    step = self.pathfinder.get_step_toward_adjacent(bot_pos, counter)
+                    if step:
+                        controller.move(bot_id, step[0], step[1])
+            return
+
+        if ctx.dirty_plates_in_sinks > 0 and ctx.clean_plates_on_tables == 0:
+            sinks = ctx.tile_cache.get("SINK", [])
+            if sinks:
+                target = sinks[0]
+                dist = max(abs(bot_pos[0] - target[0]), abs(bot_pos[1] - target[1]))
+                if dist <= 1:
+                    controller.wash_sink(bot_id, target[0], target[1])
+                else:
+                    step = self.pathfinder.get_step_toward_adjacent(bot_pos, target)
+                    if step:
+                        controller.move(bot_id, step[0], step[1])
+                return
+
+        shops = ctx.tile_cache.get("SHOP", [])
+        if shops:
+            target = shops[0]
+            dist = max(abs(bot_pos[0] - target[0]), abs(bot_pos[1] - target[1]))
+            if dist > 1:
+                step = self.pathfinder.get_step_toward_adjacent(bot_pos, target)
+                if step:
+                    controller.move(bot_id, step[0], step[1])
