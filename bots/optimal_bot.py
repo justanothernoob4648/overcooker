@@ -484,3 +484,184 @@ def build_order_graph(order: Dict, ctx: TurnContext) -> DependencyGraph:
     graph.add_node(submit_node)
 
     return graph
+
+
+# ── Planner ───────────────────────────────────────────────────────
+class Planner:
+    """Scores orders and assigns jobs to bots."""
+
+    def __init__(self):
+        self.active_graphs: Dict[int, DependencyGraph] = {}
+        self._reserved_money: int = 0
+        self._reserved_orders: Set[int] = set()
+
+    def plan(self, ctx: TurnContext, pathfinder: Pathfinder) -> Dict[int, DependencyGraph]:
+        """Assign or re-assign jobs. Returns bot_id -> DependencyGraph."""
+        for bid in ctx.bot_ids:
+            graph = self.active_graphs.get(bid)
+            if graph is not None and not graph.is_complete() and not graph.has_failed():
+                continue
+
+            best_order, best_score = self._pick_best_order(ctx, pathfinder, bid)
+
+            if best_order is not None:
+                new_graph = build_order_graph(best_order, ctx)
+                self.active_graphs[bid] = new_graph
+                self._reserved_orders.add(best_order["order_id"])
+                self._reserved_money += self._order_cost(best_order)
+            else:
+                self.active_graphs.pop(bid, None)
+
+        return self.active_graphs
+
+    def force_replan(self, ctx: TurnContext, pathfinder: Pathfinder) -> None:
+        self._reserved_orders.clear()
+        self._reserved_money = 0
+        for bid in list(self.active_graphs.keys()):
+            graph = self.active_graphs.get(bid)
+            if graph is not None and graph.has_failed():
+                self.active_graphs.pop(bid, None)
+        self.plan(ctx, pathfinder)
+
+    def _pick_best_order(self, ctx: TurnContext, pathfinder: Pathfinder,
+                          bot_id: int) -> Tuple[Optional[Dict], float]:
+        best_order = None
+        best_score = -1.0
+        available_money = ctx.money - self._reserved_money
+
+        for order in ctx.orders:
+            if not order.get("is_active", False):
+                continue
+            if order.get("completed_turn") is not None:
+                continue
+            if order["order_id"] in self._reserved_orders:
+                continue
+
+            score = self._score_order(order, ctx, pathfinder, bot_id, available_money)
+            if score > best_score:
+                best_score = score
+                best_order = order
+
+        return best_order, best_score
+
+    def _score_order(self, order: Dict, ctx: TurnContext, pathfinder: Pathfinder,
+                      bot_id: int, available_money: int) -> float:
+        cost = self._order_cost(order)
+        estimated_turns = self._estimate_turns(order, ctx, pathfinder, bot_id)
+
+        if estimated_turns <= 0:
+            return -1.0
+
+        if cost > available_money:
+            income_wait = (cost - available_money)
+            estimated_turns += income_wait
+
+        feasibility = (order["expires_turn"] - ctx.turn) - estimated_turns
+        if feasibility < 0:
+            return -1.0
+
+        urgency = max(0.0, 1.0 - (feasibility / URGENCY_BUFFER))
+        effective_value = order["reward"] + (order["penalty"] * urgency) - cost
+        if effective_value <= 0:
+            return 0.0
+
+        return effective_value / estimated_turns
+
+    def _order_cost(self, order: Dict) -> int:
+        COSTS = {"EGG": 20, "ONIONS": 30, "MEAT": 80, "NOODLES": 40, "SAUCE": 10}
+        cost = sum(COSTS.get(f, 0) for f in order["required"])
+        cost += ShopCosts.PLATE.buy_cost
+        needs_cook = any(f in ("EGG", "MEAT") for f in order["required"])
+        if needs_cook:
+            cost += ShopCosts.PAN.buy_cost
+        return cost
+
+    def _estimate_turns(self, order: Dict, ctx: TurnContext, pathfinder: Pathfinder,
+                         bot_id: int) -> int:
+        bot_state = ctx.bot_states.get(bot_id)
+        if not bot_state:
+            return 9999
+
+        bot_pos = (bot_state["x"], bot_state["y"])
+        total = 0
+
+        shops = ctx.tile_cache.get("SHOP", [])
+        counters = ctx.tile_cache.get("COUNTER", [])
+        cookers = ctx.tile_cache.get("COOKER", [])
+        submits = ctx.tile_cache.get("SUBMIT", [])
+
+        if not shops or not submits:
+            return 9999
+
+        shop = shops[0]
+        submit = submits[0]
+
+        FOOD_INFO = {
+            "EGG":     {"needs_chop": False, "needs_cook": True},
+            "ONIONS":  {"needs_chop": True,  "needs_cook": False},
+            "MEAT":    {"needs_chop": True,  "needs_cook": True},
+            "NOODLES": {"needs_chop": False, "needs_cook": False},
+            "SAUCE":   {"needs_chop": False, "needs_cook": False},
+        }
+
+        dist_to_shop = pathfinder.get_distance_to_adjacent(bot_pos, shop)
+        total += dist_to_shop
+
+        cook_count = 0
+        for food_name in order["required"]:
+            info = FOOD_INFO.get(food_name, {})
+            if counters:
+                total += pathfinder.get_distance_to_adjacent(shop, counters[0]) + 1
+            total += 1
+
+            if info.get("needs_chop"):
+                total += 2
+
+            if info.get("needs_cook"):
+                cook_count += 1
+                if cookers:
+                    total += pathfinder.get_distance_to_adjacent(counters[0] if counters else shop, cookers[0])
+                total += 1
+
+        num_cookers = max(1, ctx.tile_counts.get("COOKER", 1))
+        if cook_count > 0:
+            cook_batches = -(-cook_count // num_cookers)
+            total += max(0, cook_batches * GameConstants.COOK_PROGRESS - total // 2)
+
+        if ctx.clean_plates_on_tables <= 0:
+            if ctx.dirty_plates_in_sinks > 0:
+                total += GameConstants.PLATE_WASH_PROGRESS + 3
+            else:
+                total += 2
+
+        total += len(order["required"]) + 1
+
+        if counters:
+            total += pathfinder.get_distance_to_adjacent(counters[0], submit)
+        total += 1
+
+        return max(1, total)
+
+    def evaluate_sabotage(self, ctx: TurnContext) -> float:
+        if ctx.enemy_map_snapshot is None:
+            return -1.0
+
+        total_value = 0.0
+
+        for loc, info in ctx.enemy_map_snapshot.get("cookers", {}).items():
+            food = info.get("food")
+            if food:
+                base_cost = food.get("buy_cost", 0)
+                cook_progress = info.get("cook_progress", 0)
+                prep_value = base_cost + cook_progress * 2
+                total_value += prep_value
+
+        for loc, info in ctx.enemy_map_snapshot.get("counters", {}).items():
+            buy_cost = info.get("buy_cost", 0)
+            total_value += buy_cost
+
+        if total_value <= 0:
+            return -1.0
+
+        est_turns = 20
+        return total_value / est_turns
