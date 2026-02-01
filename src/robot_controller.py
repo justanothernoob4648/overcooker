@@ -60,7 +60,7 @@ class RobotController:
         self.__ensure_turn() #refresh
         
         if self.__moves_left.get(bot_id, 0) <= 0:
-            self.__warn(f"bot {bot_id} has already moved this turn")
+            #self.__warn(f"bot {bot_id} has already moved this turn")
             return False
         
         self.__moves_left[bot_id] -= 1
@@ -71,7 +71,7 @@ class RobotController:
         self.__ensure_turn() #refresh
 
         if self.__actions_left.get(bot_id, 0) <= 0:
-            self.__warn(f"bot {bot_id} has already acted this turn")
+            #self.__warn(f"bot {bot_id} has already acted this turn")
             return False
         
         self.__actions_left[bot_id] -= 1
@@ -126,7 +126,7 @@ class RobotController:
         try:
             b = self.__game_state.get_bot(bot_id)
         except Exception:
-            self.__warn(f"Invalid bot_id {bot_id}")
+            #self.__warn(f"Invalid bot_id {bot_id}")
             return None
 
         if b is None:
@@ -171,12 +171,12 @@ class RobotController:
         target_y = b.y if target_y is None else target_y
 
         if self.__chebyshev_dist(b.x, b.y, target_x, target_y) > 1:
-            self.__warn(f"{label} failed: target ({target_x},{target_y}) too far from bot {bot_id} at ({b.x},{b.y})")
+            #self.__warn(f"{label} failed: target ({target_x},{target_y}) too far from bot {bot_id} at ({b.x},{b.y})")
             return None
 
         m = self.__game_state.get_map(b.map_team)
         if not m.in_bounds(target_x, target_y):
-            self.__warn(f"{label} failed : target ({target_x},{target_y}) is out of bounds")
+            #self.__warn(f"{label} failed : target ({target_x},{target_y}) is out of bounds")
             return None
 
         tile = self.__game_state.get_tile(b.map_team, target_x, target_y)
@@ -210,16 +210,17 @@ class RobotController:
             return False
         
         if max(abs(dx), abs(dy)) > 1 or (dx == 0 and dy == 0):
-            self.__warn(f"move() failed: bot {bot_id} illegal step ({dx},{dy}); must be chebyshev distance 1")
+            #self.__warn(f"move() failed: bot {bot_id} illegal step ({dx},{dy}); must be chebyshev distance 1")
             return False
         
         if not self.__can_move_internal(b.map_team, b.x, b.y, dx, dy):
-            self.__warn(f"move() failed: illegal move bot {bot_id} from ({b.x},{b.y}) by ({dx},{dy})")
+            #self.__warn(f"move() failed: illegal move bot {bot_id} from ({b.x},{b.y}) by ({dx},{dy})")
             return False
         
         #move the bot through game state
         if not self.__game_state.move_bot(bot_id, dx, dy):
-            self.__warn(f"move() failed: occupied/blocked with movement of bot {bot_id} to ({b.x+dx},{b.y+dy})")
+            #self.__warn(f"move() failed: occupied/blocked with movement of bot {bot_id} to ({b.x+dx},{b.y+dy})")
+            pass
 
         return True
 
@@ -238,7 +239,7 @@ class RobotController:
         if not self.__consume_action(bot_id):
             return False
         if b.holding is not None:
-            self.__warn(f"pickup() failed: bot {bot_id} already holding something")
+            #self.__warn(f"pickup() failed: bot {bot_id} already holding something")
             return False
 
         #check validity
@@ -253,7 +254,7 @@ class RobotController:
                 # enforce invariant
                 tile.count = 0
                 tile.item = None
-                self.__warn(f"pickup() failed: BOX at ({target_x},{target_y}) is empty for bot {bot_id}")
+                #self.__warn(f"pickup() failed: BOX at ({target_x},{target_y}) is empty for bot {bot_id}")
                 return False
 
             #give bot a new deepcopy of the stored prototype
@@ -266,7 +267,7 @@ class RobotController:
 
         item = getattr(tile, "item", None)
         if item is None:
-            self.__warn(f"pickup() failed: nothing to pick up at ({target_x},{target_y}) for bot {bot_id}")
+            #self.__warn(f"pickup() failed: nothing to pick up at ({target_x},{target_y}) for bot {bot_id}")
             return False
 
         b.holding = item
@@ -283,7 +284,7 @@ class RobotController:
         if not self.__consume_action(bot_id):
             return False
         if b.holding is None:
-            self.__warn(f"place() failed: bot {bot_id} holding nothing")
+            #self.__warn(f"place() failed: bot {bot_id} holding nothing")
             return False
 
         tgt = self.__resolve_target_tile(bot_id, "place()", target_x, target_y)
@@ -304,7 +305,7 @@ class RobotController:
 
                 # DON'T ALLOW SWAP if it is currently cooking right now
                 if isinstance(old_pan, Pan) and old_pan.food is not None:
-                    self.__warn(f"place() failed: cooker at ({target_x},{target_y}) is busy; old pan has food")
+                    #self.__warn(f"place() failed: cooker at ({target_x},{target_y}) is busy; old pan has food")
                     return False
 
                 #else, just swap
@@ -324,17 +325,17 @@ class RobotController:
                 pan = tile.item
                 #is there pan?
                 if not isinstance(pan, Pan):
-                    self.__warn(f"place() failed: cooker at ({target_x},{target_y}) missing pan for food")
+                    #self.__warn(f"place() failed: cooker at ({target_x},{target_y}) missing pan for food")
                     return False
                 
                 #is pan empty
                 if pan.food is not None:
-                    self.__warn(f"place() failed: pan at ({target_x},{target_y}) is already occupied")
+                    #self.__warn(f"place() failed: pan at ({target_x},{target_y}) is already occupied")
                     return False
                 
                 #is food valid for cooking?
                 if not b.holding.can_cook:
-                    self.__warn(f"place() failed: food {b.holding.food_name} cannot be cooked")
+                    #self.__warn(f"place() failed: food {b.holding.food_name} cannot be cooked")
                     return False
 
                 #move food from hand to pan
@@ -346,7 +347,7 @@ class RobotController:
                 return True
 
             #not the cases above, so fail
-            self.__warn(f"place() failed: must hold Pan or cookable Food for cooker at ({target_x},{target_y})")
+            #self.__warn(f"place() failed: must hold Pan or cookable Food for cooker at ({target_x},{target_y})")
             return False
 
         #BOX SPECIAL CASE HERE WHERE WE PLACE THE BOX
@@ -369,7 +370,7 @@ class RobotController:
                 return True
 
             if self.__item_signature(tile.item) != self.__item_signature(b.holding):
-                self.__warn(f"place() failed: box tile at ({target_x},{target_y}) stores a different item type")
+                #self.__warn(f"place() failed: box tile at ({target_x},{target_y}) stores a different item type")
                 return False
 
             tile.count += 1
@@ -377,10 +378,10 @@ class RobotController:
             return True
 
         if not hasattr(tile, "item"):
-            self.__warn(f"place() failed: tile at ({target_x},{target_y}) cannot hold items for bot {bot_id}")
+            #self.__warn(f"place() failed: tile at ({target_x},{target_y}) cannot hold items for bot {bot_id}")
             return False
         if getattr(tile, "item") is not None:
-            self.__warn(f"place() failed: tile at ({target_x},{target_y}) already has an item for bot {bot_id}")
+            #self.__warn(f"place() failed: tile at ({target_x},{target_y}) already has an item for bot {bot_id}")
             return False
 
         tile.item = b.holding
@@ -395,7 +396,7 @@ class RobotController:
         if not self.__consume_action(bot_id):
             return False
         if b.holding is None:
-            self.__warn(f"trash() failed: bot {bot_id} holding onto nothing")
+            #self.__warn(f"trash() failed: bot {bot_id} holding onto nothing")
             return False
 
         tgt = self.__resolve_target_tile(bot_id, "trash()", target_x, target_y)
@@ -404,7 +405,7 @@ class RobotController:
         target_x, target_y, tile = tgt
 
         if not isinstance(tile, Trash):
-            self.__warn(f"trash() failed: target ({target_x},{target_y}) is not trash tile for bot {bot_id}")
+            #self.__warn(f"trash() failed: target ({target_x},{target_y}) is not trash tile for bot {bot_id}")
             return False
 
         if isinstance(b.holding, Plate):
@@ -437,7 +438,7 @@ class RobotController:
             return False
         
         if b.holding is not None:
-            self.__warn(f'buy() failed: bot {bot_id} needs to be holding nothing to buy')
+            #self.__warn(f'buy() failed: bot {bot_id} needs to be holding nothing to buy')
             return False
 
         if isinstance(item, FoodType):
@@ -451,10 +452,10 @@ class RobotController:
             if item == ShopCosts.PAN:
                 b.holding = Pan(None)
                 return True
-            self.__warn(f"buy() failed: no shop item {item}")
+            #self.__warn(f"buy() failed: no shop item {item}")
             return False
 
-        self.__warn(f"buy() failed: no item type {type(item).__name__}")
+        #self.__warn(f"buy() failed: no item type {type(item).__name__}")
         return False
 
 
@@ -499,22 +500,22 @@ class RobotController:
         target_x, target_y, tile = tgt
 
         if not isinstance(tile, Shop):
-            self.__warn(f"buy() failed: target ({target_x},{target_y}) is not a shop tile for bot {bot_id}")
+            #self.__warn(f"buy() failed: target ({target_x},{target_y}) is not a shop tile for bot {bot_id}")
             return False
         if b.holding is not None:
-            self.__warn(f"buy() failed: bot {bot_id} must not carry anything when buying")
+            #self.__warn(f"buy() failed: bot {bot_id} must not carry anything when buying")
             return False
 
         # enforce shop menu if present
         if not self.__shop_has_item(tile, item):
             name = getattr(item, "food_name", getattr(item, "item_name", str(item)))
-            self.__warn(f"buy() failed: {name} not in shop menu")
+            #self.__warn(f"buy() failed: {name} not in shop menu")
             return False
 
         cost = self.__buyable_cost(item)
         if self.__game_state.get_team_money(self.__team) < cost:
             name = getattr(item, "food_name", getattr(item, "item_name", str(item)))
-            self.__warn(f"buy() failed: team {self.__team.name} insufficient funds for {name}")
+            #self.__warn(f"buy() failed: team {self.__team.name} insufficient funds for {name}")
             return False
 
         # spend money
@@ -548,22 +549,22 @@ class RobotController:
         target_x, target_y, tile = tgt
 
         if not isinstance(tile, Counter):
-            self.__warn(f"chop() failed: target ({target_x},{target_y}) must be COUNTER for bot {bot_id}")
+            #self.__warn(f"chop() failed: target ({target_x},{target_y}) must be COUNTER for bot {bot_id}")
             return False
         
         if b.holding is not None:
-            self.__warn(f"chop() failed: bot {bot_id} must be holding nothing")
+            #self.__warn(f"chop() failed: bot {bot_id} must be holding nothing")
             return False
 
         item = getattr(tile, "item", None)
         if isinstance(item, Food):
             if not item.can_chop:
-                self.__warn(f"chop() failed: tile food not choppable bot {bot_id}")
+                #self.__warn(f"chop() failed: tile food not choppable bot {bot_id}")
                 return False
             item.chopped = True
             return True
 
-        self.__warn(f"chop() failed: nothing choppable at ({target_x},{target_y}) for bot {bot_id}")
+        #self.__warn(f"chop() failed: nothing choppable at ({target_x},{target_y}) for bot {bot_id}")
         return False
 
     def can_start_cook(self, bot_id: int, target_x: Optional[int] = None, target_y: Optional[int] = None) -> bool:
@@ -605,19 +606,19 @@ class RobotController:
         target_x, target_y, tile = tgt
 
         if not isinstance(tile, Cooker):
-            self.__warn(f"start_cook() failed: target ({target_x},{target_y}) must be cooker tile for bot {bot_id}")
+            #self.__warn(f"start_cook() failed: target ({target_x},{target_y}) must be cooker tile for bot {bot_id}")
             return False
         
         pan = tile.item
         if not isinstance(pan, Pan):
-            self.__warn(f"start_cook() failed: cooker at ({target_x},{target_y}) is missing pan for bot {bot_id}")
+            #self.__warn(f"start_cook() failed: cooker at ({target_x},{target_y}) is missing pan for bot {bot_id}")
             return False
         
         if pan.food is not None:
-            self.__warn(f"start_cook() failed: pan already occupied at ({target_x},{target_y}) bot {bot_id}")
+            #self.__warn(f"start_cook() failed: pan already occupied at ({target_x},{target_y}) bot {bot_id}")
             return False
         if not (isinstance(b.holding, Food) and b.holding.can_cook):
-            self.__warn(f"start_cook() failed: bot={bot_id} must hold cookable food")
+            #self.__warn(f"start_cook() failed: bot={bot_id} must hold cookable food")
             return False
 
         pan.food = b.holding
@@ -642,7 +643,7 @@ class RobotController:
         if not self.__consume_action(bot_id):
             return False
         if b.holding is not None:
-            self.__warn(f"take_from_pan(): bot={bot_id} already holding something")
+            #self.__warn(f"take_from_pan(): bot={bot_id} already holding something")
             return False
 
         tgt = self.__resolve_target_tile(bot_id, "take_from_pan()", target_x, target_y)
@@ -651,11 +652,11 @@ class RobotController:
         target_x, target_y, tile = tgt
 
         if not isinstance(tile, Cooker):
-            self.__warn(f"take_from_pan(): target ({target_x},{target_y}) must be COOKER bot={bot_id}")
+            #self.__warn(f"take_from_pan(): target ({target_x},{target_y}) must be COOKER bot={bot_id}")
             return False
         pan = tile.item
         if not isinstance(pan, Pan) or pan.food is None:
-            self.__warn(f"take_from_pan(): nothing in pan at ({target_x},{target_y}) bot={bot_id}")
+            #self.__warn(f"take_from_pan(): nothing in pan at ({target_x},{target_y}) bot={bot_id}")
             return False
 
         #take the food and resest the pan
@@ -678,7 +679,7 @@ class RobotController:
         if not self.__consume_action(bot_id):
             return False
         if b.holding is not None:
-            self.__warn(f"take_clean_plate() failed: bot {bot_id} must not carry anything")
+            #self.__warn(f"take_clean_plate() failed: bot {bot_id} must not carry anything")
             return False
 
         tgt = self.__resolve_target_tile(bot_id, "take_clean_plate()", target_x, target_y)
@@ -687,10 +688,10 @@ class RobotController:
         target_x, target_y, tile = tgt
 
         if not isinstance(tile, SinkTable):
-            self.__warn(f"take_clean_plate() failed: target ({target_x},{target_y}) must be a sinktable for bot {bot_id}")
+            #self.__warn(f"take_clean_plate() failed: target ({target_x},{target_y}) must be a sinktable for bot {bot_id}")
             return False
         if tile.num_clean_plates <= 0:
-            self.__warn(f"take_clean_plate() failed: no clean plates available for bot={bot_id}")
+            #self.__warn(f"take_clean_plate() failed: no clean plates available for bot={bot_id}")
             return False
 
         tile.num_clean_plates -= 1
@@ -706,7 +707,7 @@ class RobotController:
         if not self.__consume_action(bot_id):
             return False
         if not isinstance(b.holding, Plate) or not b.holding.dirty:
-            self.__warn(f"put_dirty_plate_in_sink() failed: bot {bot_id} isn't holding dirty plate")
+            #self.__warn(f"put_dirty_plate_in_sink() failed: bot {bot_id} isn't holding dirty plate")
             return False
 
         tgt = self.__resolve_target_tile(bot_id, "put_dirty_plate_in_sink()", target_x, target_y)
@@ -715,7 +716,7 @@ class RobotController:
         target_x, target_y, tile = tgt
 
         if not isinstance(tile, Sink):
-            self.__warn(f"put_dirty_plate_in_sink() failed: target ({target_x},{target_y}) must be a sink tile for bot {bot_id}")
+            #self.__warn(f"put_dirty_plate_in_sink() failed: target ({target_x},{target_y}) must be a sink tile for bot {bot_id}")
             return False
 
         #add dirty plate to sink
@@ -737,10 +738,10 @@ class RobotController:
         target_x, target_y, tile = tgt
 
         if not isinstance(tile, Sink):
-            self.__warn(f"wash_sink(): target ({target_x},{target_y}) must be sink tile bot {bot_id}")
+            #self.__warn(f"wash_sink(): target ({target_x},{target_y}) must be sink tile bot {bot_id}")
             return False
         if tile.num_dirty_plates <= 0:
-            self.__warn(f"wash_sink(): no dirty plates to wash at ({target_x},{target_y}) bot {bot_id}")
+            #self.__warn(f"wash_sink(): no dirty plates to wash at ({target_x},{target_y}) bot {bot_id}")
             return False
 
         tile.using = True
@@ -762,21 +763,21 @@ class RobotController:
         #plate if user is holidng a plate and is targetting food
         if isinstance(b.holding, Plate):
             if b.holding.dirty:
-                self.__warn(f"add_food_to_plate() failed: plate is dirty for bot {bot_id}")
+                #self.__warn(f"add_food_to_plate() failed: plate is dirty for bot {bot_id}")
                 return False
             if isinstance(getattr(tile, "item", None), Food):
                 food = tile.item
                 b.holding.food.append(food)
                 tile.item = None
                 return True
-            self.__warn(f"add_food_to_plate() failed: no food from target ({target_x},{target_y}) for bot {bot_id}")
+            #self.__warn(f"add_food_to_plate() failed: no food from target ({target_x},{target_y}) for bot {bot_id}")
             return False
 
         #plate if user is holding food and is targetting plate
         if isinstance(b.holding, Food) and isinstance(getattr(tile, "item", None), Plate):
             plate = tile.item
             if plate.dirty:
-                self.__warn(f"add_food_to_plate() failed: target plate is dirty at ({target_x},{target_y}) bot {bot_id}")
+                #self.__warn(f"add_food_to_plate() failed: target plate is dirty at ({target_x},{target_y}) bot {bot_id}")
                 return False
             
 
@@ -784,7 +785,7 @@ class RobotController:
             b.holding = None
             return True
 
-        self.__warn(f"add_food_to_plate() failed: need a plate and food for bot {bot_id} targeting ({target_x},{target_y})")
+        #self.__warn(f"add_food_to_plate() failed: need a plate and food for bot {bot_id} targeting ({target_x},{target_y})")
         return False
 
     # --------------
@@ -819,16 +820,17 @@ class RobotController:
         target_x, target_y, tile = tgt
 
         if not isinstance(tile, Submit):
-            self.__warn(f"submit() failed: target ({target_x},{target_y}) must be submit station bot {bot_id}")
+            #self.__warn(f"submit() failed: target ({target_x},{target_y}) must be submit station bot {bot_id}")
             return False
         if not isinstance(b.holding, Plate) or b.holding.dirty:
-            self.__warn(f"submit() failed: bot {bot_id} must have a clean Plate")
+            #self.__warn(f"submit() failed: bot {bot_id} must have a clean Plate")
             return False
 
         #let game state handle the submission logic
         succ = self.__game_state.submit_plate(bot_id, target_x, target_y)
         if not succ:
-            self.__warn(f"submit() failed: no matching order for bot {bot_id}")
+            #self.__warn(f"submit() failed: no matching order for bot {bot_id}")
+            pass
         return succ
 
     # ----------------------------
@@ -865,13 +867,14 @@ class RobotController:
         this does not consume a bot's move or action, so they can still move this turn
         '''
         if not self.can_switch_maps():
-            self.__warn("switch_maps() failed: not allowed now (outside window or already switched).")
+            #self.__warn("switch_maps() failed: not allowed now (outside window or already switched).")
             return False
 
         success = self.__game_state.request_switch(self.__team)
 
         if not success:
-            self.__warn("switch_maps() failed: request rejected by GameState")
+            #self.__warn("switch_maps() failed: request rejected by GameState")
+            pass
 
         return success
 
@@ -885,10 +888,10 @@ class RobotController:
         try:
             b = self.__game_state.get_bot(bot_id)
         except Exception:
-            self.__warn(f"Invalid bot_id {bot_id}")
+            #self.__warn(f"Invalid bot_id {bot_id}")
             return None
         if b.team != self.__team:
-            self.__warn(f"Cannot control enemy bot_id {bot_id}")
+            #self.__warn(f"Cannot control enemy bot_id {bot_id}")
             return None
         return b
 
@@ -922,7 +925,7 @@ class RobotController:
 
     def __warn(self, msg: str) -> None:
         '''warn string'''
-        print(f"[RC for {self.__team.name} WARN]: {msg}")
+        #print(f"[RC for {self.__team.name} WARN]: {msg}")
 
     def __can_move_internal(self, map_team: Team, x: int, y: int, dx: int, dy: int) -> bool:
         '''private helper to see if we can move by dx, dy from x, y on map_team or not'''
