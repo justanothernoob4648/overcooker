@@ -1,0 +1,49 @@
+###############
+#R....$$$....R#
+#.............#
+#..KCC...CCK..#
+#B...........B#
+#B...........B#
+#..TSC...TSC..#
+#B...........B#
+#B...........B#
+#..KCC...CCK..#
+#B...........B#
+#B...........B#
+#..TSC...TSC..#
+#R....bUb....R#
+###############
+
+SWITCH: turn=250 duration=100
+
+ORDERS:
+start=1  duration=10  required=EGG           reward=30 penalty=10
+start=10  duration=10  required=MEAT           reward=30 penalty=10
+start=20  duration=10  required=NOODLES           reward=30 penalty=10
+start=30  duration=10  required=ONIONS           reward=30 penalty=10
+start=40  duration=10  required=EGG           reward=30 penalty=10
+start=50  duration=10  required=ONIONS           reward=30 penalty=10
+start=60  duration=10  required=EGG           reward=30 penalty=10
+start=70  duration=10  required=MEAT           reward=30 penalty=10
+start=80  duration=10  required=EGG           reward=30 penalty=10
+start=90  duration=10  required=ONIONS           reward=30 penalty=10
+start=100  duration=15  required=EGG,MEAT           reward=20 penalty=10
+start=110  duration=15  required=MEAT,NOODLES           reward=20 penalty=10
+start=120  duration=15  required=NOODLES,ONIONS           reward=20 penalty=10
+start=130  duration=15  required=ONIONS,ONIONS           reward=20 penalty=10
+start=140  duration=15  required=EGG,EGG           reward=20 penalty=10
+start=150  duration=15  required=ONIONS,EGG           reward=20 penalty=10
+start=160  duration=15  required=EGG,ONIONS           reward=20 penalty=10
+start=170  duration=15  required=MEAT,EGG           reward=20 penalty=10
+start=180  duration=15  required=EGG,ONIONS           reward=20 penalty=10
+start=190  duration=15  required=ONIONS,MEAT           reward=20 penalty=10
+start=200  duration=20  required=EGG,MEAT,NOODLES           reward=10 penalty=15
+start=210  duration=20  required=MEAT,NOODLES,ONIONS           reward=10 penalty=15
+start=220  duration=20  required=NOODLES,ONIONS,MEAT           reward=10 penalty=15
+start=230  duration=20  required=ONIONS,ONIONS,EGG           reward=10 penalty=15
+start=240  duration=20  required=EGG,EGG,NOODLES           reward=10 penalty=15
+start=250  duration=20  required=ONIONS,EGG,MEAT           reward=10 penalty=15
+start=260  duration=20  required=EGG,ONIONS,EGG           reward=10 penalty=15
+start=270  duration=20  required=MEAT,EGG,MEAT           reward=10 penalty=15
+start=280  duration=20  required=EGG,ONIONS,NOODLES           reward=10 penalty=15
+start=290  duration=20  required=ONIONS,MEAT,NOODLES           reward=10 penalty=15
